@@ -1,0 +1,5 @@
+*.json
+comprovantes/
+__pycache__/
+*.pyc
+.env
