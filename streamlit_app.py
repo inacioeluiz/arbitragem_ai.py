@@ -24,7 +24,7 @@ CONFIG = {
     "senha_app_email": "",
     "smtp_servidor": "smtp.gmail.com",
     "smtp_porta": 587,
-    "senha_admin": "admin123",
+    "senha_admin": "1911Gilson@",
     "taxa_media_corretora_perc": 0.1,
     "modo_sistema": MODO_SISTEMA
 }
