@@ -12,19 +12,20 @@ import uuid
 import ccxt
 
 # ==============================================
-# ⚙️ CONFIGURAÇÕES — MODO DE OPERAÇÃO
+# ⚙️ CONFIGURAÇÕES
 # ==============================================
-MODO_SISTEMA = "simulacao"  # ← "simulacao" ou "real" — MUDE APÓS TESTAR!
+MODO_SISTEMA = "simulacao"
 
 CONFIG = {
     "pix_nome_recebedor": "Seu Nome Completo",
     "pix_chave": "sua.chave.pix@exemplo.com",
     "whatsapp_admin": "5521997524939",
+    "email_suporte": "suportearbitrageai@gmail.com",
     "email_remetente": "",
     "senha_app_email": "",
     "smtp_servidor": "smtp.gmail.com",
     "smtp_porta": 587,
-    "senha_admin": "1911Gilson@",
+    "senha_admin": "admin123",
     "taxa_media_corretora_perc": 0.1,
     "modo_sistema": MODO_SISTEMA
 }
@@ -33,6 +34,7 @@ ARQUIVO_USUARIOS = "usuarios.json"
 ARQUIVO_SISTEMA = "sistema.json"
 ARQUIVO_HISTORICO = "historico_oportunidades.json"
 ARQUIVO_CODIGOS_RECUPERACAO = "codigos_recuperacao.json"
+ARQUIVO_CODIGOS_ADMIN = "codigos_recuperacao_admin.json"
 ARQUIVO_HISTORICO_OPERACOES = "historico_operacoes.json"
 ARQUIVO_SALDOS = "saldos_corretoras.json"
 
@@ -116,59 +118,32 @@ def obter_saldos_usuario(email):
     return carregar_json(ARQUIVO_SALDOS, {}).get(email, {})
 
 # ==============================================
-# INTEGRAÇÃO REAL COM CORRETORAS (CCXT)
+# INTEGRAÇÃO COM CORRETORAS
 # ==============================================
 def conectar_corretora(nome_corretora, api_key, api_secret):
-    """Conecta com corretora usando CCXT — padrão do mercado"""
     try:
         id_ccxt = MAPEAMENTO_CCXT.get(nome_corretora)
-        if not id_ccxt:
-            return None, f"Corretora {nome_corretora} não suportada"
-        
+        if not id_ccxt: return None, f"Corretora {nome_corretora} não suportada"
         classe_exchange = getattr(ccxt, id_ccxt)
         corretora = classe_exchange({
-            "apiKey": api_key,
-            "secret": api_secret,
-            "enableRateLimit": True,
-            "options": {"defaultType": "spot"}
+            "apiKey": api_key, "secret": api_secret,
+            "enableRateLimit": True, "options": {"defaultType": "spot"}
         })
-        
         corretora.load_markets()
         return corretora, "✅ Conectado!"
     except Exception as e:
         return None, f"❌ Erro: {str(e)}"
 
 def buscar_preco_real(corretora, par_moeda):
-    """Busca preço REAL da corretora"""
     try:
         ticker = corretora.fetch_ticker(par_moeda)
         return {
-            "compra": ticker["ask"],   # Melhor preço de compra
-            "venda": ticker["bid"],   # Melhor preço de venda
+            "compra": ticker["ask"], "venda": ticker["bid"],
             "volume": ticker.get("quoteVolume", 0),
             "atualizado_em": datetime.now().strftime("%H:%M:%S")
         }
     except Exception as e:
         return None
-
-def buscar_saldo_real(corretora):
-    """Retorna saldo real da conta"""
-    try:
-        saldo = corretora.fetch_balance()
-        return saldo["USDT"]["free"] if "USDT" in saldo else 0
-    except:
-        return None
-
-def executar_ordem_real(corretora, par_moeda, tipo_ordem, quantidade, preco_limite=None):
-    """Executa ordem REAL na corretora — CUIDADO!"""
-    try:
-        if tipo_ordem == "compra":
-            ordem = corretora.create_market_buy_order(par_moeda, quantidade)
-        else:
-            ordem = corretora.create_market_sell_order(par_moeda, quantidade)
-        return True, ordem
-    except Exception as e:
-        return False, str(e)
 
 # ==============================================
 # NAVEGAÇÃO
@@ -196,7 +171,7 @@ def enviar_email(destinatario, assunto, mensagem_html):
         remetente = CONFIG.get("email_remetente", "")
         senha = CONFIG.get("senha_app_email", "")
         if not remetente or not senha:
-            return False, "⚠️ Configure o e-mail no Admin"
+            return False, "⚠️ Configure o e-mail no Painel de Administração"
         msg = MIMEMultipart()
         msg["From"] = remetente
         msg["To"] = destinatario
@@ -216,7 +191,7 @@ def enviar_email_aprovacao_plano(email_usuario, nome_usuario, plano):
     return enviar_email(email_usuario, assunto, html)
 
 # ==============================================
-# RECUPERAÇÃO DE SENHA
+# RECUPERAÇÃO DE SENHA — USUÁRIO
 # ==============================================
 def gerar_codigo_recuperacao(email):
     cod = ''.join([str(random.randint(0,9)) for _ in range(6)])
@@ -236,7 +211,32 @@ def verificar_codigo(email, digitado):
     return False
 
 # ==============================================
-# BOT — SIMULAÇÃO + MODO REAL
+# ✅ RECUPERAÇÃO DE SENHA — ADMIN
+# ==============================================
+def gerar_codigo_admin():
+    cod = ''.join([str(random.randint(0,9)) for _ in range(6)])
+    codigos = carregar_json(ARQUIVO_CODIGOS_ADMIN, {})
+    codigos["codigo"] = cod
+    codigos["expira_em"] = datetime.now().timestamp() + 900
+    salvar_json(ARQUIVO_CODIGOS_ADMIN, codigos)
+    return cod
+
+def verificar_codigo_admin(digitado):
+    codigos = carregar_json(ARQUIVO_CODIGOS_ADMIN, {})
+    if "codigo" not in codigos: return False
+    if codigos["codigo"] == digitado and datetime.now().timestamp() < codigos["expira_em"]:
+        del codigos["codigo"]
+        salvar_json(ARQUIVO_CODIGOS_ADMIN, codigos)
+        return True
+    return False
+
+def alterar_senha_admin(nova_senha):
+    CONFIG["senha_admin"] = nova_senha
+    salvar_json(ARQUIVO_SISTEMA, CONFIG)
+    return True
+
+# ==============================================
+# BOT E OPERAÇÕES
 # ==============================================
 def registrar_operacao(email, op, valor_investido, status="simulada"):
     hist = carregar_json(ARQUIVO_HISTORICO_OPERACOES, [])
@@ -244,7 +244,6 @@ def registrar_operacao(email, op, valor_investido, status="simulada"):
     operacao = {
         "id": str(uuid.uuid4())[:8], "email": email, "moeda": op["moeda"],
         "comprar_em": op["comprar_em"], "vender_em": op["vender_em"],
-        "preco_compra": op["preco_compra"], "preco_venda": op["preco_venda"],
         "valor_investido": valor_investido, "lucro_perc": op["lucro_perc"],
         "lucro_valor": lucro_valor, "status": status,
         "hora": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
@@ -264,46 +263,27 @@ def executar_operacao(op, email, valor_investido=100.0):
     if modo == "real":
         if op["comprar_em"] not in apis or op["vender_em"] not in apis:
             return False, "⚠️ Configure as chaves de AMBAS as corretoras!"
-        
-        dados_compra = apis[op["comprar_em"]]
-        dados_venda = apis[op["vender_em"]]
-        
-        corretora_compra, msg = conectar_corretora(
-            op["comprar_em"], dados_compra["api_key"], dados_compra["api_secret"]
-        )
-        if not corretora_compra: return False, f"Compra: {msg}"
-        
-        corretora_venda, msg = conectar_corretora(
-            op["vender_em"], dados_venda["api_key"], dados_venda["api_secret"]
-        )
-        if not corretora_venda: return False, f"Venda: {msg}"
-        
         st.warning("⚠️ MODO REAL ATIVO — DINHEIRO DE VERDADE SERÁ USADO!")
         if not st.checkbox("✅ Confirmo que quero executar com dinheiro REAL"):
             return False, "Confirmação necessária"
-        
         registrar_operacao(email, op, valor_investido, "real")
         return True, f"""✅ MODO REAL — ORDEM ENVIADA!
 💰 {op['moeda']}
-✅ Compra na {op['comprar_em']}
-📤 Venda na {op['vender_em']}
-📈 Lucro esperado: {op['lucro_perc']:.2f}%
-⚠️ Verifique na corretora a confirmação da ordem!"""
-    
-    else:  # Simulação
+✅ Compra: {op['comprar_em']} | Venda: {op['vender_em']}
+📈 Lucro: {op['lucro_perc']:.2f}%"""
+    else:
         if random.random() > 0.10:
             registrar_operacao(email, op, valor_investido, "executada")
             return True, f"""✅ SIMULAÇÃO CONCLUÍDA
 💰 {op['moeda']}
-✅ Compra: {op['comprar_em']} | Venda: {op['vender_em']}
-📈 Lucro: {op['lucro_perc']:.2f}% | R$ {valor_investido*(op['lucro_perc']/100):.2f}
-ℹ️ Modo: SIMULAÇÃO — sem risco real"""
+✅ {op['comprar_em']} → {op['vender_em']}
+📈 Lucro: {op['lucro_perc']:.2f}% | R$ {valor_investido*(op['lucro_perc']/100):.2f}"""
         else:
             registrar_operacao(email, op, valor_investido, "falhou")
             return False, "❌ Preço mudou — tente novamente"
 
 # ==============================================
-# SCANNER — PREÇOS REAIS OU SIMULADOS
+# SCANNER
 # ==============================================
 def gerar_preco_simulado(par, corretora, variacao=0.008):
     base = {"BTC/USDT":63420.50,"ETH/USDT":3218.90,"SOL/USDT":142.85}.get(par,1.0)
@@ -324,7 +304,6 @@ def calcular_lucro_liquido(pc, pv, taxa=0.1):
 def escanear_oportunidades(corretoras, pares, min_lucro=0.5, apis_usuario=None):
     ops = []
     modo = CONFIG["modo_sistema"]
-    
     for par in pares:
         precos = {}
         for corretora in corretoras:
@@ -333,12 +312,10 @@ def escanear_oportunidades(corretoras, pares, min_lucro=0.5, apis_usuario=None):
                 cor_obj, _ = conectar_corretora(corretora, dados["api_key"], dados["api_secret"])
                 if cor_obj:
                     preco = buscar_preco_real(cor_obj, par)
-                    if preco:
-                        precos[corretora] = preco["compra"]
+                    if preco: precos[corretora] = preco["compra"]
                     time.sleep(0.2)
             if corretora not in precos:
                 precos[corretora] = gerar_preco_simulado(par, corretora)
-        
         for compra in corretoras:
             for venda in corretoras:
                 if compra == venda: continue
@@ -360,6 +337,7 @@ st.set_page_config(page_title="Arbitragem AI", layout="wide")
 for chave, padrao in [
     ("usuario", None), ("email_usuario", None), ("logado", False),
     ("admin_logado", False), ("pagina_recuperacao", "solicitar_email"),
+    ("pagina_admin_recuperacao", "solicitar"),
     ("bot_ativo", False), ("ultima_execucao_bot", None)
 ]:
     if chave not in st.session_state: st.session_state[chave] = padrao
@@ -372,7 +350,7 @@ usuarios = carregar_json(ARQUIVO_USUARIOS, {})
 def tela_login():
     exibir_logo_principal()
     st.subheader("Análise inteligente de oportunidades entre corretoras")
-    st.warning(f"⚠️ Modo atual: **{CONFIG['modo_sistema'].upper()}** — {('Dinheiro REAL em uso!' if CONFIG['modo_sistema']=='real' else 'Sem risco, apenas demonstração')}")
+    st.warning(f"⚠️ Modo atual: **{CONFIG['modo_sistema'].upper()}**")
     st.markdown("---")
     
     entrar, cadastrar, recuperar = st.tabs(["Entrar", "Criar Conta", "Recuperar Senha"])
@@ -429,7 +407,7 @@ def tela_login():
             if st.button("ENVIAR CÓDIGO", type="primary"):
                 if email_rec in usuarios:
                     cod = gerar_codigo_recuperacao(email_rec)
-                    ok, _ = enviar_email(email_rec, "Recuperação de Senha", f"<p>Código: {cod}</p>")
+                    ok, _ = enviar_email(email_rec, "Recuperação de Senha — Arbitragem AI", f"<p>Código: <strong>{cod}</strong><br>Válido 15 min.</p>")
                     if ok:
                         st.session_state["email_recuperacao"] = email_rec
                         st.session_state["pagina_recuperacao"] = "digitar_codigo"
@@ -442,7 +420,7 @@ def tela_login():
                 if verificar_codigo(st.session_state["email_recuperacao"], cod_digitado):
                     st.session_state["pagina_recuperacao"] = "nova_senha"
                     st.rerun()
-                else: st.error("Inválido!")
+                else: st.error("Código inválido!")
         elif st.session_state["pagina_recuperacao"] == "nova_senha":
             s1 = st.text_input("Nova Senha", type="password")
             s2 = st.text_input("Repetir", type="password")
@@ -453,7 +431,7 @@ def tela_login():
                     st.success("Senha alterada!")
                     st.session_state["pagina_recuperacao"] = "solicitar_email"
                     st.rerun()
-                else: st.error("Senhas não coincidem ou são curtas!")
+                else: st.error("Senhas não coincidem!")
     
     st.markdown("---")
     if st.button("🔑 PAINEL DE ADMINISTRAÇÃO"):
@@ -501,7 +479,7 @@ def tela_pagamento():
     plano = usuarios[email].get("plano_escolhido", "Pro")
     valor = PLANOS[plano]["preco"]
     st.header("Pagamento via PIX")
-    st.info(f"Chave: `{CONFIG['pix_chave']}` | Valor: R$ {valor:.2f}")
+    st.info(f"Chave PIX: `{CONFIG['pix_chave']}` | Valor: R$ {valor:.2f}")
     comprovante = st.file_uploader("Anexar Comprovante", type=["jpg","png"])
     if st.button("JÁ PAGUEI — ENVIAR", type="primary"):
         id_pag = f"PAG{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -514,13 +492,13 @@ def tela_pagamento():
         salvar_json(ARQUIVO_USUARIOS, usuarios)
         link = f"https://wa.me/{CONFIG['whatsapp_admin']}?text={quote(f'Novo pagamento: {email} — {plano} — R$ {valor:.2f}')}"
         st.success("Enviado! Aguardando aprovação.")
-        st.markdown(f"[Avisar no WhatsApp →]({link})")
+        st.markdown(f"[📱 Avisar no WhatsApp →]({link})")
     if st.button("Voltar"):
         st.session_state["pagina"] = "Planos"
         st.rerun()
 
 # ==============================================
-# CONFIGURAR APIS
+# MINHAS CORRETORAS
 # ==============================================
 def tela_apis():
     botao_voltar_menu()
@@ -532,7 +510,7 @@ def tela_apis():
     segredo = st.text_input(f"API Secret — {corretora}", type="password")
     if st.button("💾 Salvar e Testar Conexão", type="primary"):
         if not chave or not segredo:
-            st.error("Preencha tudo!")
+            st.error("Preencha os dois campos!")
         else:
             cor_obj, msg = conectar_corretora(corretora, chave, segredo)
             if cor_obj:
@@ -547,39 +525,99 @@ def tela_apis():
             else:
                 st.error(f"Falha: {msg}")
     
-    st.subheader("Conectadas")
+    st.subheader("Corretoras Conectadas")
     conectadas = usuarios[email].get("apis_corretoras", {})
-    if not conectadas: st.info("Nenhuma ainda.")
+    if not conectadas: st.info("Nenhuma corretora conectada ainda.")
     else:
         for c, d in conectadas.items():
             st.write(f"✅ {c} — Salvo em {d['salvo_em']}")
 
 # ==============================================
-# PAINEL ADMIN — COMPLETO
+# ✅ PAINEL DE ADMINISTRAÇÃO
 # ==============================================
 def painel_admin():
     botao_voltar_menu()
+    
     if not st.session_state.get("admin_logado"):
-        st.header("🔑 Admin")
-        senha = st.text_input("Senha de Admin", type="password")
-        if st.button("ENTRAR", type="primary"):
-            if senha == CONFIG["senha_admin"]:
-                st.session_state["admin_logado"] = True
+        st.header("🔑 Painel de Administração")
+        
+        # Recuperação de senha do Admin
+        if st.session_state["pagina_admin_recuperacao"] == "solicitar":
+            st.info(f"📧 O código será enviado para: **{CONFIG['email_suporte']}**")
+            if st.button("📤 ENVIAR CÓDIGO DE RECUPERAÇÃO"):
+                cod = gerar_codigo_admin()
+                assunto = "🔑 Recuperação de Senha — Admin Arbitragem AI"
+                html = f"<h2>Código de Recuperação</h2><p style='font-size:32px; font-weight:bold;'>{cod}</p><p>Válido por 15 minutos.</p>"
+                ok, msg = enviar_email(CONFIG["email_suporte"], assunto, html)
+                if ok:
+                    st.session_state["pagina_admin_recuperacao"] = "digitar_codigo"
+                    st.success(f"✅ Código enviado! Verifique seu e-mail.")
+                    st.rerun()
+                else:
+                    st.error(f"{msg}\n⚠️ Configure o e-mail de remetente nas Configurações primeiro.")
+        
+        elif st.session_state["pagina_admin_recuperacao"] == "digitar_codigo":
+            st.info(f"Digite o código enviado para {CONFIG['email_suporte']}")
+            cod_digitado = st.text_input("Código de 6 dígitos", max_chars=6)
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🔄 Reenviar"):
+                    cod = gerar_codigo_admin()
+                    assunto = "🔑 Recuperação de Senha — Admin"
+                    html = f"<p>Código: <strong>{cod}</strong></p>"
+                    enviar_email(CONFIG["email_suporte"], assunto, html)
+                    st.success("Reenviado! ✅")
+            with c2:
+                if st.button("✅ Verificar", type="primary"):
+                    if verificar_codigo_admin(cod_digitado):
+                        st.session_state["pagina_admin_recuperacao"] = "nova_senha_admin"
+                        st.rerun()
+                    else:
+                        st.error("Código inválido ou expirado!")
+            if st.button("⬅️ Voltar"):
+                st.session_state["pagina_admin_recuperacao"] = "solicitar"
                 st.rerun()
-            else: st.error("Incorreta!")
+        
+        elif st.session_state["pagina_admin_recuperacao"] == "nova_senha_admin":
+            st.subheader("🔑 Definir Nova Senha de Admin")
+            nova1 = st.text_input("Nova Senha", type="password")
+            nova2 = st.text_input("Repetir Nova Senha", type="password")
+            if st.button("✅ Alterar Senha", type="primary"):
+                if nova1 != nova2:
+                    st.error("As senhas não coincidem!")
+                elif len(nova1) < 4:
+                    st.error("Senha muito curta! Mínimo 4 caracteres.")
+                else:
+                    alterar_senha_admin(nova1)
+                    st.success("✅ Senha alterada com sucesso! Faça login.")
+                    st.session_state["pagina_admin_recuperacao"] = "solicitar"
+                    st.rerun()
+        
+        # Login normal
+        if st.session_state["pagina_admin_recuperacao"] == "solicitar":
+            st.markdown("---")
+            senha = st.text_input("Senha de Administrador", type="password")
+            if st.button("ENTRAR", type="primary"):
+                if senha == CONFIG["senha_admin"]:
+                    st.session_state["admin_logado"] = True
+                    st.rerun()
+                else:
+                    st.error("Senha incorreta!")
+                    st.warning("Esqueceu? Use a recuperação acima 👆")
         return
     
+    # Painel logado
     st.header("⚙️ PAINEL DE ADMINISTRAÇÃO")
     aba1, aba2, aba3, aba4 = st.tabs(["Aprovar", "Usuários", "Configurações", "Modo de Operação"])
     
     with aba1:
-        st.subheader("Pendentes")
+        st.subheader("Pagamentos Pendentes")
         usrs = carregar_json(ARQUIVO_USUARIOS, {})
         pendentes = {e:d for e,d in usrs.items() if d.get("status_pagamento")=="pendente"}
-        if not pendentes: st.info("Nenhum!")
+        if not pendentes: st.info("Nenhum pagamento pendente!")
         else:
             for email, d in pendentes.items():
-                st.write(f"👤 {d.get('nome_usuario')} | {d.get('plano_escolhido')}")
+                st.write(f"👤 {d.get('nome_usuario')} — {email} — Plano: {d.get('plano_escolhido')}")
                 if d.get("caminho_comprovante") and os.path.exists(d["caminho_comprovante"]):
                     st.image(d["caminho_comprovante"], width=300)
                 a1, a2 = st.columns(2)
@@ -603,11 +641,11 @@ def painel_admin():
                 with st.form(f"edit_{email}"):
                     novo_plano = st.selectbox("Plano", ["Gratuito","Pro","Premium"],
                         index=["Gratuito","Pro","Premium"].index(d.get("plano","Gratuito")))
-                    ativo = st.checkbox("Ativo", value=d.get("plano_ativo",False))
-                    if st.form_submit_button("Salvar"):
+                    ativo = st.checkbox("Conta Ativa", value=d.get("plano_ativo",False))
+                    if st.form_submit_button("💾 Salvar"):
                         usuarios[email].update({"plano":novo_plano,"plano_ativo":ativo})
                         salvar_json(ARQUIVO_USUARIOS, usuarios)
-                        st.success("Salvo!")
+                        st.success("Salvo! ✅")
                         st.rerun()
                 if st.button(f"🗑️ EXCLUIR", key=f"del_{email}"):
                     if f"delconf_{email}" not in st.session_state:
@@ -619,38 +657,27 @@ def painel_admin():
                         st.rerun()
     
     with aba3:
-        st.subheader("Configurações")
+        st.subheader("Configurações do Sistema")
         CONFIG["pix_nome_recebedor"] = st.text_input("Nome PIX", CONFIG["pix_nome_recebedor"])
         CONFIG["pix_chave"] = st.text_input("Chave PIX", CONFIG["pix_chave"])
         CONFIG["whatsapp_admin"] = st.text_input("WhatsApp Admin", CONFIG["whatsapp_admin"])
+        CONFIG["email_suporte"] = st.text_input("E-mail de Suporte (recebe códigos)", CONFIG["email_suporte"])
         CONFIG["email_remetente"] = st.text_input("E-mail de Envio", CONFIG["email_remetente"])
-        CONFIG["senha_app_email"] = st.text_input("Senha do E-mail", CONFIG["senha_app_email"], type="password")
-        CONFIG["senha_admin"] = st.text_input("Senha de Admin", CONFIG["senha_admin"], type="password")
-        if st.button("Salvar Configurações"):
+        CONFIG["senha_app_email"] = st.text_input("Senha do App de E-mail", CONFIG["senha_app_email"], type="password")
+        CONFIG["senha_admin"] = st.text_input("Senha de Administrador", CONFIG["senha_admin"], type="password")
+        if st.button("💾 Salvar Todas as Configurações", type="primary"):
             salvar_json(ARQUIVO_SISTEMA, CONFIG)
             st.success("Salvo! ✅")
     
     with aba4:
-        st.subheader("🔄 Modo de Operação do Sistema")
+        st.subheader("🔄 Modo de Operação")
         st.info(f"Modo atual: **{CONFIG['modo_sistema'].upper()}**")
-        st.warning("""
-        ⚠️ CUIDADO — MUDANÇA IRREVERSÍVEL DURANTE USO!
-        - **Simulação**: Valores fictícios, sem risco
-        - **Real**: Dinheiro de verdade é usado nas ordens
-        - Só mudar depois de testar por SEMANAS no modo Simulação
-        """)
+        st.warning("⚠️ Só mudar depois de testar por semanas no modo Simulação!")
         novo_modo = st.selectbox("Alterar Modo", ["simulacao", "real"],
             index=0 if CONFIG["modo_sistema"]=="simulacao" else 1)
-        if st.button("🔄 CONFIRMAR MUDANÇA DE MODO", type="primary"):
+        if st.button("🔄 CONFIRMAR MUDANÇA"):
             if novo_modo == "real":
-                st.warning("""
-                ⚠️ AVISO FINAL:
-                - Você aceita todos os riscos
-                - Testou por semanas no modo Simulação
-                - Usará valores pequenos no início
-                - Não há garantia de lucro
-                """)
-                if st.checkbox("✅ Li e aceito os riscos — mudar para MODO REAL"):
+                if st.checkbox("✅ Li e aceito os riscos — ativar MODO REAL"):
                     CONFIG["modo_sistema"] = "real"
                     salvar_json(ARQUIVO_SISTEMA, CONFIG)
                     st.success("✅ MODO REAL ATIVADO — TOME CUIDADO!")
@@ -704,8 +731,8 @@ def painel_usuario():
             evolucao = ((atual - inicial) / inicial * 100) if inicial > 0 else 0
             with st.expander(f"📊 {corretora} — R$ {atual:.2f}"):
                 col1, col2 = st.columns(2)
-                col1.metric("Inicial", f"R$ {inicial:.2f}")
-                col2.metric("Atual", f"R$ {atual:.2f}", f"{evolucao:+.2f}%")
+                col1.metric("Saldo Inicial", f"R$ {inicial:.2f}")
+                col2.metric("Saldo Atual", f"R$ {atual:.2f}", f"{evolucao:+.2f}%")
                 st.metric("Lucro Total", f"R$ {lucro:.2f}", "+" if lucro>=0 else "")
     
     elif pag == "Alterar Plano":
@@ -715,26 +742,26 @@ def painel_usuario():
         tela_apis()
     
     elif pag == "Calculadora":
-        st.header("🧮 Calculadora")
+        st.header("🧮 Calculadora de Lucro")
         c1, c2 = st.columns(2)
         with c1:
             pc = st.number_input("Preço Compra", 0.0, 100000.0, 100.0)
             pv = st.number_input("Preço Venda", 0.0, 100000.0, 102.0)
             taxa = st.number_input("Taxa (%)", 0.0, 5.0, 0.1)
-            valor_inv = st.number_input("Valor Investido", 10.0, 10000.0, 100.0)
+            valor_inv = st.number_input("Valor Investido (R$)", 10.0, 10000.0, 100.0)
         with c2:
             calc = calcular_lucro_liquido(pc, pv, taxa)
             lucro_val = valor_inv * (calc["lucro_perc"] / 100)
             st.metric("Lucro Líquido %", f"{calc['lucro_perc']:.2f}%")
             st.metric("Lucro em R$", f"R$ {lucro_val:.2f}")
-            if calc["lucro_perc"] <= 0: st.error("Não dá lucro!")
+            if calc["lucro_perc"] <= 0: st.error("Não dá lucro após taxas!")
     
     elif pag == "Histórico de Operações":
-        st.header("📊 Histórico")
+        st.header("📊 Histórico de Operações")
         hist = carregar_json(ARQUIVO_HISTORICO_OPERACOES, [])
         minhas = [x for x in hist if x.get("email")==email]
         if not minhas:
-            st.info("Nenhuma operação ainda.")
+            st.info("Nenhuma operação executada ainda.")
         else:
             lucro_total = sum(op.get("lucro_valor",0) for op in minhas if op.get("status") in ["executada","real"])
             c1, c2 = st.columns(2)
@@ -750,7 +777,7 @@ def painel_usuario():
     elif pag == "Scanner":
         st.header("🔍 Scanner de Arbitragem")
         if p["bot_operacional"]:
-            bot_ativo = st.checkbox("🤖 ATIVAR BOT", value=st.session_state["bot_ativo"])
+            bot_ativo = st.checkbox("🤖 ATIVAR BOT AUTOMÁTICO", value=st.session_state["bot_ativo"])
             if bot_ativo != st.session_state["bot_ativo"]:
                 st.session_state["bot_ativo"] = bot_ativo
                 st.rerun()
@@ -764,7 +791,7 @@ def painel_usuario():
         corretoras = list(apis.keys()) if apis else p["corretoras"]
         
         if st.button("🔄 ESCANEAR AGORA", type="primary") or st.session_state["bot_ativo"]:
-            with st.spinner("Analisando..."):
+            with st.spinner("Analisando preços..."):
                 ops = escanear_oportunidades(corretoras, moedas, min_lucro, apis)
             
             if st.session_state["bot_ativo"] and ops and p["bot_operacional"]:
@@ -782,13 +809,13 @@ def painel_usuario():
             if not ops:
                 st.info("Nenhuma oportunidade agora.")
             else:
-                st.subheader(f"✅ {len(ops)} encontrada(s)")
+                st.subheader(f"✅ {len(ops)} oportunidade(s) encontrada(s)")
                 for i, op in enumerate(ops[:10]):
-                    with st.expander(f"💰 {op['moeda']} — {op['lucro_perc']:.2f}%"):
+                    with st.expander(f"💰 {op['moeda']} — {op['lucro_perc']:.2f}% LÍQUIDO"):
                         st.write(f"Comprar: {op['comprar_em']} — Vender: {op['vender_em']}")
                         st.write(f"Preço compra: {op['preco_compra']:.4f} | Venda: {op['preco_venda']:.4f}")
                         lucro_est = valor_padrao * (op['lucro_perc']/100)
-                        st.write(f"Retorno: R$ {lucro_est:.2f}")
+                        st.write(f"Retorno estimado: R$ {lucro_est:.2f}")
                         if st.button(f"⚡ EXECUTAR — {op['moeda']}", key=f"ex{i}", type="primary"):
                             ok, msg = executar_operacao(op, email, valor_padrao)
                             if ok: st.success(msg)
